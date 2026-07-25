@@ -1,0 +1,13 @@
+[project]
+name = "career-mcp"
+version = "0.1.0"
+description = "대학생 개인의 인턴·신입 채용 매칭 도구"
+requires-python = ">=3.12"
+dependencies = [
+    "fastmcp>=3.0",
+    "httpx>=0.27",
+    "python-dotenv>=1.0",
+]
+
+[tool.uv]
+package = false

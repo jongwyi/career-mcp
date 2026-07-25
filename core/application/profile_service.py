@@ -6,6 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 
+from core.application.snapshot import refresh_snapshot
 from core.domain.profile import (
     Fact,
     FactKind,
@@ -121,5 +122,4 @@ class ProfileService:
         return None
 
     async def _refresh_snapshot(self) -> None:
-        facts = await self._store.list_facts(active_only=True)
-        await self._store.save_snapshot(build_snapshot(facts, updated_at=None))
+        await refresh_snapshot(self._store)

@@ -13,6 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from core.application.snapshot import refresh_snapshot
 from core.domain.profile import Fact, FactKind, FactSource
 from core.ports.store import ProfileStore
 
@@ -75,6 +76,9 @@ class ImportService:
 
             seen_in_file.add(digest)
             added.append(await self._store.add_fact(candidate))
+
+        if added:
+            await refresh_snapshot(self._store)
 
         return ImportReport(
             added=tuple(added), duplicates=duplicates, errors=tuple(errors)
