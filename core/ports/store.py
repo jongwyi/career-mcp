@@ -44,9 +44,16 @@ class ProfileStore(Protocol):
 
 
 class RawStore(Protocol):
-    """모든 수집 경로의 공통 착지점."""
+    """모든 수집 경로의 공통 착지점.
+
+    배치 메서드가 있는 이유는 규모 때문이다. 공고 1건당 왕복 3회를 하면
+    1만 건 수집에 3만 요청이 들고 40분이 걸린다 — GH Actions 제한을 넘는다.
+    단건 메서드는 크롬 확장처럼 한두 건씩 들어오는 경로용으로 남긴다.
+    """
 
     async def append(self, raw: RawPosting) -> RawPosting: ...
+
+    async def append_many(self, raws: Sequence[RawPosting]) -> Sequence[RawPosting]: ...
 
     async def list_unparsed(self, *, limit: int = 100) -> Sequence[RawPosting]:
         """파서를 고친 뒤 재처리할 대상."""
@@ -56,16 +63,28 @@ class RawStore(Protocol):
         self, raw_id: int, *, ok: bool, reason: str | None = None
     ) -> None: ...
 
+    async def mark_parsed_many(
+        self, raw_ids: Sequence[int], *, ok: bool, reason: str | None = None
+    ) -> None: ...
+
 
 class JobStore(Protocol):
     async def upsert(self, posting: JobPosting) -> JobPosting:
         """(source_id, external_id) 기준 upsert. last_seen 을 갱신한다."""
         ...
 
+    async def upsert_many(
+        self, postings: Sequence[JobPosting]
+    ) -> Sequence[JobPosting]: ...
+
     async def get(self, job_id: int) -> JobPosting | None: ...
 
     async def search(self, flt: MatchFilter) -> Sequence[JobPosting]:
         """① 규칙 필터 단계. 수백 건을 flt.limit 건까지 좁힌다."""
+        ...
+
+    async def count(self, flt: MatchFilter) -> int:
+        """limit 과 무관한 전체 건수. 제외된 공고를 보고하는 데 쓴다."""
         ...
 
     async def mark_closed(self, keys: Sequence[JobKey]) -> int:

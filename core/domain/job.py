@@ -106,6 +106,8 @@ class JobPosting:
     education: str | None = None      # 학력 조건
     job_field: str | None = None      # NCS 직무분야
     headcount: int | None = None
+    #: 지원 자격 제한 태그 (장애/보훈/제한경쟁/사회형평/...). 비어 있으면 일반 공고.
+    restrictions: tuple[str, ...] = ()
     status: JobStatus = JobStatus.OPEN
     first_seen: datetime | None = None
     last_seen: datetime | None = None

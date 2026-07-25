@@ -33,6 +33,7 @@ from core.domain.job import (
     ParseResult,
     RawPosting,
 )
+from core.domain.restriction import detect_restrictions
 
 SOURCE_ID = "moef"
 BASE_URL = "https://apis.data.go.kr/1051000/recruitment"
@@ -143,22 +144,27 @@ class MoefParser:
                 # 링크가 없으면 사용자가 지원할 수 없으므로 기관명으로라도 남긴다.
                 url = f"https://job.alio.go.kr/recruit.do?keyword={row.get('instNm','')}"
 
+            requirements = _lines(row.get("aplyQlfcCn"))
+            company = row.get("instNm") or None
             posting = JobPosting(
                 key=raw.key,
                 title=title,
                 url=url,
-                company=(row.get("instNm") or None),
+                company=company,
                 employment_type=employment_type_of(row.get("hireTypeLst")),
                 career_level=career_level_of(row.get("recrutSe")),
                 location=(row.get("workRgnNmLst") or None),
                 deadline=deadline,
                 jd_text=_build_jd_text(row),
-                requirements=_lines(row.get("aplyQlfcCn")),
+                requirements=requirements,
                 preferred=_lines(row.get("prefCn") or row.get("prefCondCn")),
                 education=_education(row),
                 job_field=(row.get("ncsCdNmLst") or None),
                 headcount=_int_or_none(row.get("recrutNope")),
                 status=_status(row, deadline),
+                restrictions=detect_restrictions(
+                    title, company=company, requirements=requirements
+                ),
             )
             return ParseOk(posting)
         except Exception as exc:  # 한 건의 실패가 나머지를 막지 않는다

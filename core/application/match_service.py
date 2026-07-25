@@ -59,6 +59,19 @@ class MatchService:
         )
 
 
+    async def restricted_count(self, flt: MatchFilter) -> int:
+        """기본 조회에서 빠진 제한 공고가 몇 건인지.
+
+        조용히 빼면 사용자는 "공고가 없다"로 이해한다. 항상 같이 보고한다.
+        """
+        from dataclasses import replace
+
+        target = replace(flt, include_restricted=True)
+        total = await self._jobs.count(target)
+        unrestricted = await self._jobs.count(replace(flt, include_restricted=False))
+        return max(total - unrestricted, 0)
+
+
 def attributions_for(postings: tuple[JobPosting, ...]) -> tuple[str, ...]:
     sources = {p.key.source_id for p in postings}
     return tuple(ATTRIBUTION[s] for s in sorted(sources) if s in ATTRIBUTION)

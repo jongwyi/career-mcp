@@ -44,6 +44,42 @@ class SupabaseRawStore(SupabaseClientMixin):
         )
         return self._to_raw(rows[0])
 
+    async def append_many(self, raws: Sequence[RawPosting]) -> Sequence[RawPosting]:
+        if not raws:
+            return []
+        rows = await self._request(
+            "POST",
+            "/raw_postings",
+            json=[
+                {
+                    "source_id": r.key.source_id,
+                    "external_id": r.key.external_id,
+                    "capture_method": str(r.capture_method),
+                    "payload": dict(r.payload),
+                    "html_snapshot": r.html_snapshot,
+                }
+                for r in (raw.truncated() for raw in raws)
+            ],
+            prefer="return=representation",
+        )
+        return [self._to_raw(r) for r in rows]
+
+    async def mark_parsed_many(
+        self, raw_ids: Sequence[int], *, ok: bool, reason: str | None = None
+    ) -> None:
+        if not raw_ids:
+            return
+        await self._request(
+            "PATCH",
+            "/raw_postings",
+            params={"id": f"in.({','.join(str(i) for i in raw_ids)})"},
+            json={
+                "parse_status": "ok" if ok else "failed",
+                "parse_reason": None if ok else (reason or "")[:500],
+            },
+            prefer="return=minimal",
+        )
+
     async def list_unparsed(self, *, limit: int = 100) -> Sequence[RawPosting]:
         rows = await self._request(
             "GET",
@@ -99,6 +135,25 @@ class SupabaseJobStore(SupabaseClientMixin):
         )
         return self._to_posting(rows[0])
 
+    async def upsert_many(
+        self, postings: Sequence[JobPosting]
+    ) -> Sequence[JobPosting]:
+        if not postings:
+            return []
+        # 같은 배치 안에 같은 키가 두 번 있으면 Postgres 가
+        # "ON CONFLICT DO UPDATE command cannot affect row a second time" 로 죽는다.
+        deduped: dict[tuple[str, str], JobPosting] = {}
+        for posting in postings:
+            deduped[(posting.key.source_id, posting.key.external_id)] = posting
+        rows = await self._request(
+            "POST",
+            "/jobs",
+            params={"on_conflict": "source_id,external_id"},
+            json=[self._to_row(p) for p in deduped.values()],
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        return [self._to_posting(r) for r in rows]
+
     async def get(self, job_id: int) -> JobPosting | None:
         rows = await self._request(
             "GET", "/jobs", params={"id": f"eq.{job_id}", "select": "*"}
@@ -106,6 +161,11 @@ class SupabaseJobStore(SupabaseClientMixin):
         return self._to_posting(rows[0]) if rows else None
 
     async def search(self, flt: MatchFilter) -> Sequence[JobPosting]:
+        rows = await self._request("GET", "/jobs", params=self._search_params(flt))
+        return [self._to_posting(r) for r in rows]
+
+    @staticmethod
+    def _search_params(flt: MatchFilter) -> dict[str, str]:
         params: dict[str, str] = {
             "select": "*",
             "order": "deadline.asc.nullslast",
@@ -121,6 +181,8 @@ class SupabaseJobStore(SupabaseClientMixin):
             params["career_level"] = (
                 f"in.({','.join(str(c) for c in flt.career_levels)})"
             )
+        if not flt.include_restricted:
+            params["restrictions"] = "eq.{}"
         if flt.location:
             params["location"] = f"ilike.*{flt.location}*"
         if flt.deadline_after:
@@ -136,8 +198,14 @@ class SupabaseJobStore(SupabaseClientMixin):
                 params["or"] = clause
             else:
                 params["and"] = f"(or{clause})"
-        rows = await self._request("GET", "/jobs", params=params)
-        return [self._to_posting(r) for r in rows]
+        return params
+
+    async def count(self, flt: MatchFilter) -> int:
+        params = self._search_params(flt)
+        params.pop("limit", None)
+        params.pop("order", None)
+        params.pop("select", None)
+        return await self._count("/jobs", params)
 
     async def mark_closed(self, keys: Sequence[JobKey]) -> int:
         closed = 0
@@ -223,6 +291,7 @@ class SupabaseJobStore(SupabaseClientMixin):
             "education": posting.education,
             "job_field": posting.job_field,
             "headcount": posting.headcount,
+            "restrictions": list(posting.restrictions),
             "status": str(posting.status),
             "last_seen": datetime.now().astimezone().isoformat(),
         }
@@ -248,6 +317,7 @@ class SupabaseJobStore(SupabaseClientMixin):
             education=row.get("education"),
             job_field=row.get("job_field"),
             headcount=row.get("headcount"),
+            restrictions=tuple(row.get("restrictions") or ()),
             status=JobStatus(row.get("status", "open")),
             first_seen=dt(row.get("first_seen")),
             last_seen=dt(row.get("last_seen")),

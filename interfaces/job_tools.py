@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 from typing import Any
 
@@ -47,6 +48,8 @@ def _brief(job: JobPosting) -> dict[str, Any]:
             out["requirements_truncated"] = len(job.requirements) - BRIEF_REQUIREMENTS
     if job.preferred:
         out["preferred"] = list(job.preferred[:BRIEF_REQUIREMENTS])
+    if job.restrictions:
+        out["restrictions"] = list(job.restrictions)
     return out
 
 
@@ -97,10 +100,12 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
         location: str | None = None,
         limit: int = 20,
         include_closed: bool = False,
+        include_restricted: bool = False,
     ) -> dict[str, Any]:
         flt = _parse_filter(
             keyword, employment_type, career_level, location, limit, include_closed
         )
+        flt = replace(flt, include_restricted=include_restricted)
         found = tuple(await queries.search(flt))
         return {
             "count": len(found),
@@ -112,12 +117,16 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
         limit: int = 25,
         keyword: str | None = None,
         location: str | None = None,
+        include_restricted: bool = False,
     ) -> dict[str, Any]:
-        context = await matcher.candidates(
-            MatchFilter.for_newgrad_intern(
-                keyword=keyword, location=location, limit=limit
-            )
+        base = MatchFilter.for_newgrad_intern(
+            keyword=keyword,
+            location=location,
+            limit=limit,
+            include_restricted=include_restricted,
         )
+        context = await matcher.candidates(base)
+        excluded = await matcher.restricted_count(base) if not include_restricted else 0
         snapshot = context.candidates.profile
         return {
             "profile": {
@@ -137,6 +146,12 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
             "candidate_count": len(context.jobs),
             "candidates": [_brief(j) for j in context.jobs],
             "attribution": list(context.attributions),
+            "excluded_restricted": excluded,
+            "excluded_note": (
+                f"지원 자격이 제한된 공고 {excluded}건을 제외했다"
+                " (장애인 전형·보훈 제한경쟁·사회형평 채용 등)."
+                " 사용자가 해당된다면 include_restricted=true 로 다시 호출하라."
+            ) if excluded else None,
             "instruction": (
                 "이것은 순위가 매겨지지 않은 후보 목록이다. "
                 "각 공고의 requirements 를 프로필 facts 와 대조해 "
@@ -182,6 +197,9 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
             "순위·적합도·근거·부족한 요건을 만드는 것은 너의 일이다. "
             "각 후보의 requirements 를 프로필 facts 와 대조하고, "
             "matched 에는 근거가 된 fact_id 를 반드시 포함하라. "
+            "기본적으로 지원 자격이 제한된 공고(장애인 전형·보훈 제한경쟁 등)는 제외하고 "
+            "몇 건이 제외됐는지 excluded_restricted 로 알려준다. "
+            "사용자가 해당 자격을 갖고 있다면 include_restricted=true 로 다시 호출하라. "
             "keyword 나 location 으로 좁힐 수 있다.",
             jobs_match,
         ),

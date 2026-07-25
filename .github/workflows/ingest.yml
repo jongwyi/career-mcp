@@ -1,0 +1,38 @@
+name: 채용 공고 수집
+
+on:
+  schedule:
+    # 매일 06:00 KST (21:00 UTC). GitHub cron 은 수십 분 지연될 수 있다.
+    - cron: "0 21 * * *"
+  workflow_dispatch:
+    inputs:
+      full:
+        description: "전체 백필 (증분 대신 처음부터)"
+        type: boolean
+        default: false
+
+# 이전 실행이 아직 돌고 있으면 겹치지 않게 한다.
+concurrency:
+  group: ingest
+  cancel-in-progress: false
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: 수집 실행
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+          DATA_GO_KR_SERVICE_KEY: ${{ secrets.DATA_GO_KR_SERVICE_KEY }}
+          SARAMIN_ACCESS_KEY: ${{ secrets.SARAMIN_ACCESS_KEY }}
+        run: |
+          uv run --project . python worker/ingest.py \
+            ${{ inputs.full && '--full' || '' }}

@@ -35,6 +35,9 @@ class MatchFilter:
     location: str | None = None
     deadline_after: date | None = None
     include_closed: bool = False
+    #: 지원 자격이 제한된 공고(장애인 전형 등)를 포함할지.
+    #: 기본은 제외하되 몇 건이 빠졌는지는 호출측이 보고한다.
+    include_restricted: bool = False
     limit: int = DEFAULT_CANDIDATE_LIMIT
 
     def __post_init__(self) -> None:
