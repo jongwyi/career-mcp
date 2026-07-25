@@ -446,11 +446,26 @@ JSON-LD `JobPosting`을 제공하는 곳이 많아 `_generic.json`이 그대로 
 | Supabase 서비스 키 | 로컬 `.env` + GH Secrets. 확장에는 절대 넣지 않음 |
 | Supabase anon 키 | 확장에만. RLS로 `raw_postings` INSERT 한정 |
 | RLS | **주 통제 수단.** 모든 테이블에 활성화, anon 은 명시된 것만 |
-| 저장소 | 비공개 필수 |
+| 저장소 | **공개** — https://github.com/jongwyi/career-mcp (아래 참고) |
 | 사이트 자격증명 | 저장하지 않음 |
 | 프로필 데이터 | git 커밋 금지. 임포트 JSON 파일도 `.gitignore` |
 
 원격 엔드포인트가 없어 공격면이 rev.2보다 크게 줄었다. 남은 노출은 anon 키 하나뿐이다.
+
+### 저장소를 공개로 바꾼 이유 (rev.3 결정 번복)
+
+rev.2까지 "비공개 필수"였다. **사람인 API 신청이 공개 URL을 요구**해서 뒤집었다.
+비공개 저장소는 심사자가 열 수 없어 목적을 달성하지 못한다.
+
+공개해도 되는 근거:
+- 저장소에 자격증명이 없다. `.env`는 `.gitignore` 대상이고 커밋 전 확인했다
+- 프로필 데이터는 Supabase에만 있고 저장소에 들어오지 않는다
+- GH Secrets는 공개 저장소에서도 암호화되어 안전하다
+- 공개 코드가 오히려 API 심사 신뢰도를 높인다
+
+**남는 위험은 실수로 개인 데이터를 커밋하는 것 하나다.** `.gitignore`가
+`.env*`, `profile-import-*.json`, `*.profile.json`을 막지만, 파일명이 다르면 새는다.
+**커밋 전 `git status`를 확인하는 습관이 유일한 방어선이다.**
 
 ## 12. 비용
 
