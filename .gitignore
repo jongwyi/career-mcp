@@ -1,0 +1,26 @@
+# 자격증명 — 절대 커밋 금지
+.env
+.env.*
+!.env.example
+
+# 프로필 데이터 (개인정보)
+profile-import-*.json
+*.profile.json
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node (확장)
+node_modules/
+extension/dist/
+
+# 도구
+.gstack/
+
+# OS
+.DS_Store

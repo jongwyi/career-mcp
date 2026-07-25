@@ -1,0 +1,85 @@
+"""저장소 포트. 인터페이스만 두고 구현은 adapters/store 에 있다.
+
+application 레이어는 이 파일만 알면 된다. Supabase 의 존재를 몰라야 한다.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Mapping, Sequence
+from datetime import datetime
+from typing import Protocol
+
+from core.domain.job import JobPosting, JobKey, RawPosting, SourceStatus
+from core.domain.match import MatchFilter, MatchResult
+from core.domain.profile import Fact, FactKind, FactSource, ProfileSnapshot
+
+
+class ProfileStore(Protocol):
+    async def add_fact(self, fact: Fact) -> Fact:
+        """저장하고 id 가 채워진 Fact 를 돌려준다."""
+        ...
+
+    async def get_fact(self, fact_id: int) -> Fact | None: ...
+
+    async def list_facts(
+        self,
+        *,
+        kinds: Sequence[FactKind] | None = None,
+        active_only: bool = True,
+        since: datetime | None = None,
+        source: FactSource | None = None,
+    ) -> Sequence[Fact]:
+        """since/source 조합이 profile_diff 를 지탱한다."""
+        ...
+
+    async def supersede_fact(self, fact_id: int, replacement: Fact) -> Fact:
+        """replacement 를 저장하고 원본에 superseded_by 를 건다. 원자적이어야 한다."""
+        ...
+
+    async def load_snapshot(self) -> ProfileSnapshot | None:
+        """캐시된 스냅샷. 없으면 None — 호출측이 facts 로 재생성한다."""
+        ...
+
+    async def save_snapshot(self, snapshot: ProfileSnapshot) -> None: ...
+
+
+class RawStore(Protocol):
+    """모든 수집 경로의 공통 착지점."""
+
+    async def append(self, raw: RawPosting) -> RawPosting: ...
+
+    async def list_unparsed(self, *, limit: int = 100) -> Sequence[RawPosting]:
+        """파서를 고친 뒤 재처리할 대상."""
+        ...
+
+    async def mark_parsed(
+        self, raw_id: int, *, ok: bool, reason: str | None = None
+    ) -> None: ...
+
+
+class JobStore(Protocol):
+    async def upsert(self, posting: JobPosting) -> JobPosting:
+        """(source_id, external_id) 기준 upsert. last_seen 을 갱신한다."""
+        ...
+
+    async def get(self, job_id: int) -> JobPosting | None: ...
+
+    async def search(self, flt: MatchFilter) -> Sequence[JobPosting]:
+        """① 규칙 필터 단계. 수백 건을 flt.limit 건까지 좁힌다."""
+        ...
+
+    async def mark_closed(self, keys: Sequence[JobKey]) -> int:
+        """마감 공고는 삭제하지 않는다. 놓친 기회 회고가 가능해야 한다."""
+        ...
+
+    async def ingest_status(self) -> Mapping[str, SourceStatus]: ...
+
+
+class MatchStore(Protocol):
+    async def save_results(
+        self, results: Sequence[MatchResult], *, criteria: MatchFilter
+    ) -> int:
+        """run_id 를 돌려준다."""
+        ...
+
+    async def history(self, job_id: int) -> Sequence[MatchResult]: ...
