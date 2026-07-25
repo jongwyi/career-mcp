@@ -17,11 +17,29 @@ MAX_HTML_SNAPSHOT = 200_000
 
 
 class EmploymentType(StrEnum):
-    INTERN = "intern"
-    NEWGRAD = "newgrad"
-    CONTRACT = "contract"
-    ACTIVITY = "activity"  # 대외활동 / 공모전
+    """고용형태. '어떤 신분으로 일하는가'."""
+
+    INTERN = "intern"        # 청년인턴 (체험형/채용형 포함)
+    FULLTIME = "fulltime"    # 정규직
+    CONTRACT = "contract"    # 계약직 / 비정규직 / 무기계약직
     UNKNOWN = "unknown"
+
+
+class CareerLevel(StrEnum):
+    """채용구분. '누구를 뽑는가'.
+
+    고용형태와 직교하는 축이다. 하나로 합치면 '정규직 신입'과 '계약직 신입'이
+    구분되지 않고, 실제 소스(재정경제부 API, 사람인)도 둘을 별개 필드로 준다.
+    """
+
+    NEWGRAD = "newgrad"          # 신입
+    EXPERIENCED = "experienced"  # 경력
+    BOTH = "both"                # 신입+경력 (신입도 지원 가능)
+    UNKNOWN = "unknown"
+
+    @property
+    def open_to_newgrad(self) -> bool:
+        return self in (CareerLevel.NEWGRAD, CareerLevel.BOTH, CareerLevel.UNKNOWN)
 
 
 class CaptureMethod(StrEnum):
@@ -79,11 +97,15 @@ class JobPosting:
     url: str
     company: str | None = None
     employment_type: EmploymentType = EmploymentType.UNKNOWN
+    career_level: CareerLevel = CareerLevel.UNKNOWN
     location: str | None = None
     deadline: date | None = None
     jd_text: str | None = None
     requirements: tuple[str, ...] = ()
     preferred: tuple[str, ...] = ()
+    education: str | None = None      # 학력 조건
+    job_field: str | None = None      # NCS 직무분야
+    headcount: int | None = None
     status: JobStatus = JobStatus.OPEN
     first_seen: datetime | None = None
     last_seen: datetime | None = None
