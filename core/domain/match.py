@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from enum import StrEnum
 
-from core.domain.job import EmploymentType, JobPosting
+from core.domain.job import CareerLevel, EmploymentType, JobPosting
 from core.domain.profile import ProfileSnapshot
 
 # LLM 리랭크에 넘길 후보 수. 너무 많으면 컨텍스트를 낭비하고,
@@ -31,6 +31,7 @@ class MatchFilter:
 
     keyword: str | None = None
     employment_types: tuple[EmploymentType, ...] = ()
+    career_levels: tuple[CareerLevel, ...] = ()
     location: str | None = None
     deadline_after: date | None = None
     include_closed: bool = False
@@ -39,6 +40,23 @@ class MatchFilter:
     def __post_init__(self) -> None:
         if self.limit <= 0:
             raise ValueError("limit 은 1 이상이어야 한다")
+
+    @classmethod
+    def for_newgrad_intern(cls, **kwargs: object) -> MatchFilter:
+        """가장 흔한 조회. 인턴 + 신입이 지원 가능한 것.
+
+        career_level 이 unknown 인 공고도 포함한다 — 소스가 값을 안 준 것이지
+        신입을 안 받는다는 뜻이 아니다. 누락이 오분류보다 비싸다.
+        """
+        return cls(
+            employment_types=(EmploymentType.INTERN,),
+            career_levels=(
+                CareerLevel.NEWGRAD,
+                CareerLevel.BOTH,
+                CareerLevel.UNKNOWN,
+            ),
+            **kwargs,  # type: ignore[arg-type]
+        )
 
 
 @dataclass(frozen=True, slots=True)

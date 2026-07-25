@@ -20,9 +20,15 @@ if str(ROOT) not in sys.path:
 from dotenv import load_dotenv  # noqa: E402
 from fastmcp import FastMCP  # noqa: E402
 
+import httpx  # noqa: E402
+
+from adapters.store.supabase_jobs import SupabaseJobStore  # noqa: E402
 from adapters.store.supabase_store import SupabaseProfileStore  # noqa: E402
 from core.application.import_service import ImportService  # noqa: E402
+from core.application.job_query_service import JobQueryService  # noqa: E402
+from core.application.match_service import MatchService  # noqa: E402
 from core.application.profile_service import ProfileService  # noqa: E402
+from interfaces.job_tools import build_job_tools  # noqa: E402
 from interfaces.tool_registry import build_profile_tools, register  # noqa: E402
 
 
@@ -38,9 +44,21 @@ def build_server() -> FastMCP:
             f"확인 위치: {ROOT / '.env'}"
         )
 
-    store = SupabaseProfileStore.from_env()
+    # 저장소들이 HTTP 연결을 공유한다. 툴마다 새 커넥션을 열 이유가 없다.
+    client = httpx.AsyncClient(timeout=30)
+    profile_store = SupabaseProfileStore.from_env(client=client)
+    job_store = SupabaseJobStore.from_env(client=client)
+
+    profile = ProfileService(profile_store)
+
     mcp = FastMCP("career")
-    register(mcp, build_profile_tools(ProfileService(store), ImportService(store)))
+    register(mcp, build_profile_tools(profile, ImportService(profile_store)))
+    register(
+        mcp,
+        build_job_tools(
+            JobQueryService(job_store), MatchService(profile, job_store)
+        ),
+    )
     return mcp
 
 

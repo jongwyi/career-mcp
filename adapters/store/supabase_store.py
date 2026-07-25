@@ -29,8 +29,8 @@ class SupabaseError(RuntimeError):
     pass
 
 
-class SupabaseProfileStore:
-    """core.ports.store.ProfileStore 를 구현한다."""
+class SupabaseClientMixin:
+    """PostgREST 접속 공통부. 저장소 구현들이 공유한다."""
 
     def __init__(
         self,
@@ -53,19 +53,18 @@ class SupabaseProfileStore:
             "Authorization": f"Bearer {service_key}",
             "Content-Type": "application/json",
         }
-        self._client = client or httpx.AsyncClient(timeout=20)
+        self._client = client or httpx.AsyncClient(timeout=30)
 
     @classmethod
-    def from_env(cls) -> SupabaseProfileStore:
+    def from_env(cls, *, client: httpx.AsyncClient | None = None) -> Any:
         return cls(
             os.environ.get("SUPABASE_URL", ""),
             os.environ.get("SUPABASE_SERVICE_KEY", ""),
+            client=client,
         )
 
     async def aclose(self) -> None:
         await self._client.aclose()
-
-    # ---------------------------------------------------------------- HTTP
 
     async def _request(
         self,
@@ -89,6 +88,21 @@ class SupabaseProfileStore:
         if not response.content:
             return None
         return response.json()
+
+    async def _count(self, path: str, params: Mapping[str, str]) -> int:
+        """Content-Range 헤더로 건수만 받는다. 행을 끌어오지 않는다."""
+        headers = {**self._headers, "Prefer": "count=exact", "Range": "0-0"}
+        response = await self._client.get(
+            f"{self._base}{path}", params={**params, "select": "id"}, headers=headers
+        )
+        if response.status_code >= 400:
+            raise SupabaseError(f"count {path} -> {response.status_code}")
+        total = response.headers.get("content-range", "*/0").split("/")[-1]
+        return int(total) if total.isdigit() else 0
+
+
+class SupabaseProfileStore(SupabaseClientMixin):
+    """core.ports.store.ProfileStore 를 구현한다."""
 
     # ---------------------------------------------------------------- 매핑
 
