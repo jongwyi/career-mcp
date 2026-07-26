@@ -67,6 +67,14 @@ class RawStore(Protocol):
         self, raw_ids: Sequence[int], *, ok: bool, reason: str | None = None
     ) -> None: ...
 
+    async def prune(self) -> int:
+        """공고당 최신 1건만 남기고 오래된 원본을 지운다.
+
+        전체 백필마다 원본이 누적되면 무료 한도를 넘긴다.
+        재파싱에는 최신 1건이면 충분하고, 파싱 실패분은 남긴다.
+        """
+        ...
+
 
 class JobStore(Protocol):
     async def upsert(self, posting: JobPosting) -> JobPosting:

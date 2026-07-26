@@ -78,6 +78,13 @@ async def run(full: bool, max_pages: int) -> int:
         closed = await job_store.close_expired()
         log(f"마감 처리: {closed}건")
 
+        try:
+            pruned = await raw_store.prune()
+            log(f"원본 정리: {pruned}건 (공고당 최신 1건만 유지)")
+        except Exception as exc:
+            # 정리 실패가 수집을 실패로 만들지는 않는다.
+            log(f"경고: 원본 정리 실패 — {exc}")
+
         final = await job_store.ingest_status()
         for source_id, info in final.items():
             log(

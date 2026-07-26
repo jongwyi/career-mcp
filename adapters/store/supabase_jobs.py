@@ -80,6 +80,10 @@ class SupabaseRawStore(SupabaseClientMixin):
             prefer="return=minimal",
         )
 
+    async def prune(self) -> int:
+        removed = await self._request("POST", "/rpc/prune_raw_postings", json={})
+        return int(removed or 0)
+
     async def list_unparsed(self, *, limit: int = 100) -> Sequence[RawPosting]:
         rows = await self._request(
             "GET",
