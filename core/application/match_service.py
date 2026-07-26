@@ -19,7 +19,7 @@ from datetime import date, datetime
 from core.application.profile_service import ProfileService
 from core.domain.job import JobPosting
 from core.domain.match import MatchCandidates, MatchFilter
-from core.domain.job import InterestStatus, JobInterest
+from core.domain.job import InterestStatus, JobInterest, JobPosting
 from core.domain.match import MatchResult, ScoredJob
 from core.ports.store import InterestStore, JobStore, MatchStore
 
@@ -36,6 +36,17 @@ class MatchContext:
     #: 공고별 지난번 점수. 같은 공고를 다시 볼 때 비교 기준이 된다.
     previous_scores: Mapping[int, MatchResult] = field(default_factory=dict)
     dismissed_count: int = 0
+    #: 내용도 프로필도 그대로라 재평가가 불필요한 공고. 요건을 보내지 않는다.
+    cached_ids: frozenset[int] = frozenset()
+    profile_stamp: datetime | None = None
+
+    @property
+    def fresh(self) -> tuple[JobPosting, ...]:
+        return tuple(j for j in self.jobs if j.id not in self.cached_ids)
+
+    @property
+    def cached(self) -> tuple[JobPosting, ...]:
+        return tuple(j for j in self.jobs if j.id in self.cached_ids)
 
     @property
     def jobs(self) -> tuple[JobPosting, ...]:
@@ -66,10 +77,21 @@ class MatchService:
         snapshot = await self._profile.read()
 
         previous: Mapping[int, MatchResult] = {}
+        cached_ids: set[int] = set()
+        stamp = await self._profile.stamp()
+
         if self._history and postings:
-            previous = await self._history.latest_scores(
-                [p.id for p in postings if p.id is not None]
-            )
+            ids = [p.id for p in postings if p.id is not None]
+            entries = await self._history.cached_scores(ids)
+            for posting in postings:
+                entry = entries.get(posting.id)
+                if entry is None:
+                    continue
+                result, job_hash, profile_stamp = entry
+                previous[posting.id] = result
+                # 공고 내용도 프로필도 그대로면 다시 평가할 이유가 없다.
+                if job_hash == posting.content_hash and profile_stamp == stamp:
+                    cached_ids.add(posting.id)
 
         return MatchContext(
             candidates=MatchCandidates(
@@ -80,6 +102,8 @@ class MatchService:
             attributions=attributions_for(postings),
             previous_scores=previous,
             dismissed_count=len(dismissed),
+            cached_ids=frozenset(cached_ids),
+            profile_stamp=stamp,
         )
 
     async def save_scores(
@@ -93,7 +117,10 @@ class MatchService:
             raise RuntimeError("MatchStore 가 연결되지 않았다")
         snapshot = await self._profile.read()
         return await self._history.save_results(
-            scores, criteria=criteria, fact_count=snapshot.fact_count
+            scores,
+            criteria=criteria,
+            fact_count=snapshot.fact_count,
+            profile_stamp=await self._profile.stamp(),
         )
 
     async def mark(

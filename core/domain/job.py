@@ -141,6 +141,25 @@ class JobPosting:
     def is_expired(self, today: date) -> bool:
         return self.deadline is not None and self.deadline < today
 
+    @property
+    def content_hash(self) -> str:
+        """평가 캐시의 무효화 기준.
+
+        저장하지 않고 매번 계산한다 — 컬럼을 늘릴 이유가 없고,
+        해시 규칙이 두 곳에 생기면 반드시 어긋난다.
+        점수에 영향을 주는 필드만 넣는다 (last_seen 같은 건 매 수집마다 바뀐다).
+        """
+        import hashlib
+
+        parts = [
+            self.title,
+            "|".join(self.requirements),
+            "|".join(self.preferred),
+            self.education or "",
+            self.deadline.isoformat() if self.deadline else "",
+        ]
+        return hashlib.sha256("\x00".join(parts).encode()).hexdigest()[:32]
+
 
 # ---------------------------------------------------------------- 파싱 결과
 

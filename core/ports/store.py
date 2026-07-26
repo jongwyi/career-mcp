@@ -67,6 +67,15 @@ class ProfileStore(Protocol):
 
     async def list_discarded(self) -> Sequence[Fact]: ...
 
+    async def verify_facts(self, fact_ids: Sequence[int]) -> int:
+        """사용자가 확인한 사실로 표시한다.
+
+        임포트된 사실은 GPT 가 대화에서 추론한 것이라 과장이 섞인다
+        ("논의했다" -> "참여했다"). 확인 여부를 구분해야
+        자소서 근거로 쓸 때 무엇을 믿을 수 있는지 알 수 있다.
+        """
+        ...
+
     async def get_attributes(self) -> ProfileAttributes: ...
 
     async def set_attribute(self, key: AttributeKey, value: str) -> None: ...
@@ -163,9 +172,14 @@ class InterestStore(Protocol):
 
 class MatchStore(Protocol):
     async def save_results(
-        self, results: Sequence[ScoredJob], *, criteria: MatchFilter, fact_count: int
+        self,
+        results: Sequence[ScoredJob],
+        *,
+        criteria: MatchFilter,
+        fact_count: int,
+        profile_stamp: datetime | None = None,
     ) -> int:
-        """run_id 를 돌려준다."""
+        """run_id 를 돌려준다. job_hash/profile_stamp 가 다음 실행의 캐시 기준이 된다."""
         ...
 
     async def history(
@@ -174,4 +188,14 @@ class MatchStore(Protocol):
 
     async def latest_scores(self, job_ids: Sequence[int]) -> Mapping[int, MatchResult]:
         """공고별 가장 최근 점수. '이전 추천을 한눈에' 의 재료."""
+        ...
+
+    async def cached_scores(
+        self, job_ids: Sequence[int]
+    ) -> Mapping[int, tuple[MatchResult, str | None, datetime | None]]:
+        """(평가, 당시 공고 해시, 당시 프로필 시각).
+
+        호출측이 지금 값과 비교해 재평가 여부를 정한다.
+        저장소는 판단하지 않는다 — 무효화 규칙은 도메인의 몫이다.
+        """
         ...

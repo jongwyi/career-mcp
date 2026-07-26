@@ -43,11 +43,10 @@ def _brief(job: JobPosting) -> dict[str, Any]:
     if job.headcount:
         out["headcount"] = job.headcount
     if job.requirements:
-        out["requirements"] = list(job.requirements[:BRIEF_REQUIREMENTS])
-        if len(job.requirements) > BRIEF_REQUIREMENTS:
-            out["requirements_truncated"] = len(job.requirements) - BRIEF_REQUIREMENTS
-    if job.preferred:
-        out["preferred"] = list(job.preferred[:BRIEF_REQUIREMENTS])
+        # 요건 전문은 job_requirements 로 따로 가져간다.
+        # 측정 결과 요건이 응답의 절반 가까이를 차지했는데,
+        # 깊게 보는 건 상위 몇 건뿐이라 나머지는 읽히지 않고 버려졌다.
+        out["requirement_count"] = len(job.requirements)
     if job.restrictions:
         out["restrictions"] = list(job.restrictions)
     return out
@@ -114,7 +113,7 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
         }
 
     async def jobs_match(
-        limit: int = 25,
+        limit: int = 8,
         keyword: str | None = None,
         location: str | None = None,
         include_restricted: bool = False,
@@ -129,52 +128,78 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
         excluded = await matcher.restricted_count(base) if not include_restricted else 0
         snapshot = context.candidates.profile
         prev = context.previous_scores
+
+        # 프로필 계층화 — 요건 대조의 근거가 되는 kind 만 개별로 싣는다.
+        # goal/preference 는 방향이지 근거가 아니라 한 줄로 압축한다.
+        # evidence 는 지원서 재료를 쓸 때만 필요하므로 profile_evidence 로 뺐다.
+        evidence_kinds = ("skill", "experience", "strength")
+        evidence_facts: dict[str, list[dict[str, Any]]] = {}
+        direction: dict[str, list[str]] = {}
+        unverified = 0
+        for kind, facts in snapshot.by_kind.items():
+            if str(kind) in evidence_kinds:
+                items = []
+                for f in facts:
+                    items.append(
+                        {"fact_id": f.id, "content": f.content}
+                        if f.is_verified
+                        else {"fact_id": f.id, "content": f.content, "unverified": True}
+                    )
+                    unverified += 0 if f.is_verified else 1
+                evidence_facts[str(kind)] = items
+            else:
+                direction[str(kind)] = [f.content for f in facts]
+
         return {
             "profile": {
                 "fact_count": snapshot.fact_count,
-                "facts": {
-                    str(kind): [
-                        {
-                            "fact_id": f.id,
-                            "content": f.content,
-                            "evidence": f.evidence,
-                        }
-                        for f in facts
-                    ]
-                    for kind, facts in snapshot.by_kind.items()
-                },
+                "evidence_facts": evidence_facts,
+                "direction": direction,
+                "unverified_count": unverified,
+                "unverified_note": (
+                    f"근거 사실 중 {unverified}건이 아직 사용자 확인을 거치지 않았다. "
+                    "임포트된 사실에는 과장이 섞일 수 있으므로("
+                    "'논의했다'가 '참여했다'로 기록되는 등) "
+                    "자소서 근거로 인용하기 전에 사용자에게 확인하고 "
+                    "profile_confirm 으로 표시하라."
+                    if unverified else None
+                ),
+                "evidence_note": (
+                    "구체적 근거(evidence)는 여기 없다. "
+                    "지원서 재료를 쓸 때 profile_evidence(fact_ids) 로 가져가라."
+                ),
             },
-            "candidate_count": len(context.jobs),
-            "candidates": [
-                {
-                    **_brief(j),
-                    **(
-                        {"previous_score": prev[j.id].score}
-                        if j.id in prev else {}
-                    ),
-                }
-                for j in context.jobs
+            "fresh": [
+                {**_brief(j), **({"previous_score": prev[j.id].score} if j.id in prev else {})}
+                for j in context.fresh
             ],
-            "dismissed_count": context.dismissed_count,
+            "cached": [
+                {
+                    "job_id": j.id,
+                    "title": j.title,
+                    "company": j.company,
+                    "deadline": j.deadline.isoformat() if j.deadline else None,
+                    "days_left": _days_left(j.deadline),
+                    "score": prev[j.id].score,
+                    "gaps": [g.jd_requirement for g in prev[j.id].gaps][:3],
+                }
+                for j in context.cached
+                if j.id in prev
+            ],
             "attribution": list(context.attributions),
             "excluded_restricted": excluded,
-            "excluded_note": (
-                f"지원 자격이 제한된 공고 {excluded}건을 제외했다"
-                " (장애인 전형·보훈 제한경쟁·사회형평 채용 등)."
-                " 사용자가 해당된다면 include_restricted=true 로 다시 호출하라."
-            ) if excluded else None,
+            "dismissed_count": context.dismissed_count,
             "instruction": (
-                "이것은 순위가 매겨지지 않은 후보 목록이다. "
-                "각 공고의 requirements 를 프로필 facts 와 대조해 "
-                "적합도 점수(0~100), 충족 근거(matched), 부족한 요건(gaps)을 만들어라. "
-                "matched 의 각 항목에는 근거가 된 fact_id 를 반드시 포함하라 — "
-                "근거 없는 점수는 자소서에 쓸 수 없다. "
-                "gaps 에는 severity(low/medium/high)와 구체적인 보완 제안을 넣어라. "
-                "상위 5개 정도만 자세히 설명하고 나머지는 간단히 언급하라. "
-                "**평가를 마치면 match_save 로 점수를 반드시 저장하라** — "
-                "저장하지 않으면 다음에 같은 공고를 볼 때 비교할 기준이 없다. "
-                "previous_score 가 있는 후보는 지난번 평가 결과이므로 "
-                "점수가 크게 달라졌다면 이유를 설명하라."
+                "**fresh 는 아직 평가하지 않았거나 내용이 바뀐 공고다. "
+                "cached 는 지난번 평가 그대로이므로 다시 평가하지 마라** — "
+                "공고 내용도 프로필도 그때와 같다. 점수를 그대로 쓰면 된다.\n"
+                "fresh 를 평가하려면 job_requirements(job_ids) 로 요건을 가져와라. "
+                "제목·기관·직무분야·학력만 보고 명백히 맞지 않는 것은 "
+                "요건을 가져오지 말고 넘겨라 — 그게 이 2단계의 목적이다.\n"
+                "평가 시 evidence_facts 의 fact_id 를 근거로 인용하고, "
+                "unverified 표시가 있는 사실은 확정적으로 쓰지 마라.\n"
+                "평가를 마치면 match_save 로 반드시 저장하라. "
+                "저장해야 다음 실행에서 cached 로 넘어가 재평가를 건너뛴다."
             ),
         }
 
@@ -238,6 +263,7 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
                     )
                     for g in (s.get("gaps") or [])
                 ),
+                job_hash=s.get("job_hash"),
             )
             for s in scores
         ]
@@ -270,6 +296,34 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
             )
         return {"count": len(items), "results": items}
 
+    async def job_requirements(job_ids: list[int]) -> dict[str, Any]:
+        out = []
+        for jid in job_ids[:12]:
+            job = await queries.detail(jid)
+            if job is None:
+                out.append({"job_id": jid, "error": "공고를 찾을 수 없다"})
+                continue
+            out.append(
+                {
+                    "job_id": jid,
+                    "title": job.title,
+                    "company": job.company,
+                    "content_hash": job.content_hash,
+                    "requirements": list(job.requirements),
+                    "preferred": list(job.preferred),
+                    "education": job.education,
+                    "url": job.url,
+                }
+            )
+        return {
+            "count": len(out),
+            "jobs": out,
+            "note": (
+                "match_save 로 저장할 때 각 항목에 content_hash 를 job_hash 로 넣어라. "
+                "그래야 다음 실행에서 재평가를 건너뛸 수 있다."
+            ),
+        }
+
     async def ingest_status() -> dict[str, Any]:
         status = await queries.status()
         return {
@@ -298,9 +352,12 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
             "순위·적합도·근거·부족한 요건을 만드는 것은 너의 일이다. "
             "각 후보의 requirements 를 프로필 facts 와 대조하고, "
             "matched 에는 근거가 된 fact_id 를 반드시 포함하라. "
-            "기본적으로 지원 자격이 제한된 공고(장애인 전형·보훈 제한경쟁 등)는 제외하고 "
-            "몇 건이 제외됐는지 excluded_restricted 로 알려준다. "
-            "사용자가 해당 자격을 갖고 있다면 include_restricted=true 로 다시 호출하라. "
+            "**응답은 fresh(평가 필요)와 cached(지난 평가 유효)로 나뉜다.** "
+            "cached 는 공고 내용도 프로필도 그때와 같으므로 다시 평가하지 마라. "
+            "fresh 를 평가하려면 job_requirements 로 요건을 따로 가져온다. "
+            "기본 8건만 준다 — 사람이 한 번에 검토할 수 있는 양이다. "
+            "더 필요하면 limit 를 올려 다시 부른다. "
+            "자격이 제한된 공고는 기본 제외하고 excluded_restricted 로 건수를 알린다. "
             "keyword 나 location 으로 좁힐 수 있다.",
             jobs_match,
         ),
@@ -321,6 +378,16 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
             "그 공고에 맞춘 자소서·지원 전략을 논의할 때 호출한다. "
             "job_id 는 jobs_match 나 jobs_search 결과에 들어 있다.",
             job_detail,
+        ),
+        ToolSpec(
+            "job_requirements",
+            "특정 공고들의 **지원자격 전문**을 가져온다. "
+            "**jobs_match 의 fresh 후보 중 평가할 가치가 있는 것만 골라 호출한다.** "
+            "제목·기관·직무분야만 보고 명백히 맞지 않는 공고는 여기까지 오지 말아야 한다 — "
+            "요건은 공고당 200~800자라 전부 가져오면 컨텍스트를 낭비한다. "
+            "응답의 content_hash 를 match_save 에 job_hash 로 넘겨야 "
+            "다음 실행에서 재평가를 건너뛸 수 있다.",
+            job_requirements,
         ),
         ToolSpec(
             "job_mark",
@@ -348,8 +415,10 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
             "**jobs_match 로 순위를 매긴 뒤 반드시 호출하라.** "
             "저장하지 않으면 다음에 같은 공고를 평가할 때 비교 기준이 없어 "
             "점수가 매번 달라지는 것을 사용자가 알 수 없다. "
-            "scores 는 [{job_id, score, matched:[{jd_req, fact_id}], "
-            "gaps:[{jd_req, severity, suggestion}]}] 형식이다.",
+            "scores 는 [{job_id, score, job_hash, matched:[{jd_req, fact_id}], "
+            "gaps:[{jd_req, severity, suggestion}]}] 형식이다. "
+            "**job_hash 는 job_requirements 응답의 content_hash 를 그대로 넣어라** — "
+            "이게 있어야 다음 실행에서 이 공고가 cached 로 분류돼 재평가를 건너뛴다.",
             match_save,
         ),
         ToolSpec(

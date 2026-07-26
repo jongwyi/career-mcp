@@ -405,7 +405,12 @@ class SupabaseMatchStore(SupabaseClientMixin):
     """
 
     async def save_results(
-        self, results: Sequence[ScoredJob], *, criteria: MatchFilter, fact_count: int
+        self,
+        results: Sequence[ScoredJob],
+        *,
+        criteria: MatchFilter,
+        fact_count: int,
+        profile_stamp: datetime | None = None,
     ) -> int:
         run = await self._request(
             "POST",
@@ -431,6 +436,10 @@ class SupabaseMatchStore(SupabaseClientMixin):
                         "run_id": run_id,
                         "job_id": r.job_id,
                         "score": r.score,
+                        "job_hash": r.job_hash,
+                        "profile_stamp": (
+                            profile_stamp.isoformat() if profile_stamp else None
+                        ),
                         "matched": [
                             {"jd_req": e.jd_requirement, "evidence_fact_id": e.fact_id}
                             for e in r.matched
@@ -471,6 +480,33 @@ class SupabaseMatchStore(SupabaseClientMixin):
             },
         )
         return {r["job_id"]: self._to_result(r) for r in rows or []}
+
+    async def cached_scores(
+        self, job_ids: Sequence[int]
+    ) -> Mapping[int, tuple[MatchResult, str | None, datetime | None]]:
+        if not job_ids:
+            return {}
+        rows = await self._request(
+            "GET",
+            "/match_results",
+            params={
+                "select": "*",
+                "job_id": f"in.({','.join(str(i) for i in job_ids)})",
+                "order": "id.desc",
+            },
+        )
+        out: dict[str, Any] = {}
+        for row in rows or []:
+            jid = row["job_id"]
+            if jid in out:  # id.desc 라 첫 행이 최신이다
+                continue
+            stamp = row.get("profile_stamp")
+            out[jid] = (
+                self._to_result(row),
+                row.get("job_hash"),
+                datetime.fromisoformat(stamp) if stamp else None,
+            )
+        return out
 
     @staticmethod
     def _to_result(row: Mapping[str, Any]) -> MatchResult:

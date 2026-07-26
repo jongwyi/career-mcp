@@ -132,6 +132,14 @@ class ProfileService:
     async def discarded(self) -> Sequence[Fact]:
         return await self._store.list_discarded()
 
+    async def stamp(self) -> datetime | None:
+        """프로필이 마지막으로 바뀐 시각. 평가 캐시의 무효화 기준 중 하나다."""
+        snapshot = await self._store.load_snapshot()
+        return snapshot.updated_at if snapshot else None
+
+    async def verify(self, fact_ids: Sequence[int]) -> int:
+        return await self._store.verify_facts(fact_ids)
+
     async def attributes(self) -> ProfileAttributes:
         return await self._store.get_attributes()
 

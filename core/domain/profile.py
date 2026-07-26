@@ -89,6 +89,9 @@ class Fact:
     superseded_by: int | None = None
     discarded_at: datetime | None = None
     discard_reason: DiscardReason | None = None
+    #: 사용자가 직접 확인한 시각. None 이면 아직 검증되지 않은 사실이다.
+    #: 임포트된 사실은 GPT 가 대화에서 추론한 것이라 과장이 섞인다.
+    verified_at: datetime | None = None
 
     def __post_init__(self) -> None:
         if not self.content.strip():
@@ -103,6 +106,10 @@ class Fact:
     @property
     def is_discarded(self) -> bool:
         return self.discarded_at is not None
+
+    @property
+    def is_verified(self) -> bool:
+        return self.verified_at is not None
 
     @property
     def dedupe_hash(self) -> str:

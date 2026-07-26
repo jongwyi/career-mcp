@@ -133,6 +133,11 @@ class SupabaseProfileStore(SupabaseClientMixin):
                 if row.get("discard_reason")
                 else None
             ),
+            verified_at=(
+                datetime.fromisoformat(row["verified_at"])
+                if row.get("verified_at")
+                else None
+            ),
         )
 
     @staticmethod
@@ -236,6 +241,18 @@ class SupabaseProfileStore(SupabaseClientMixin):
             },
         )
         return [self._to_fact(r) for r in rows]
+
+    async def verify_facts(self, fact_ids: Sequence[int]) -> int:
+        if not fact_ids:
+            return 0
+        rows = await self._request(
+            "PATCH",
+            "/profile_facts",
+            params={"id": f"in.({','.join(str(i) for i in fact_ids)})"},
+            json={"verified_at": datetime.now().astimezone().isoformat()},
+            prefer="return=representation",
+        )
+        return len(rows or [])
 
     async def get_attributes(self) -> ProfileAttributes:
         rows = await self._request(

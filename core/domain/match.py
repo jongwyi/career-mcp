@@ -16,7 +16,11 @@ from core.domain.profile import ProfileSnapshot
 
 # LLM 리랭크에 넘길 후보 수. 너무 많으면 컨텍스트를 낭비하고,
 # 너무 적으면 규칙 필터의 오차를 LLM 이 교정할 여지가 없다.
-DEFAULT_CANDIDATE_LIMIT = 40
+#
+# 40 -> 8 로 줄였다. 측정 결과 후보 24건이 응답의 71%(6,828토큰)를 차지했는데,
+# 사람이 한 번에 검토하고 행동할 수 있는 건 5~8건이다. 나머지는 읽히지 않고 버려진다.
+# 더 필요하면 limit 를 올려 다시 부르면 된다.
+DEFAULT_CANDIDATE_LIMIT = 8
 
 
 class Severity(StrEnum):
@@ -104,6 +108,8 @@ class ScoredJob:
     score: int
     matched: tuple[Evidence, ...] = ()
     gaps: tuple[Gap, ...] = ()
+    #: 평가 당시 공고 내용의 해시. 다음 실행에서 재평가 여부를 가른다.
+    job_hash: str | None = None
 
 
 @dataclass(frozen=True, slots=True)

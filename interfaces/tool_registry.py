@@ -70,15 +70,52 @@ def build_profile_tools(
         }
 
     async def profile_discard(
-        fact_id: int, reason: str = "not_mine"
+        fact_ids: list[int], reason: str = "not_mine"
     ) -> dict[str, Any]:
-        fact = await profile.discard(fact_id, DiscardReason(reason))
+        discarded, errors = [], []
+        for fid in fact_ids:
+            try:
+                fact = await profile.discard(fid, DiscardReason(reason))
+                discarded.append({"fact_id": fact.id, "content": fact.content})
+            except Exception as exc:
+                errors.append(f"{fid}: {exc}")
         return {
-            "discarded_fact_id": fact.id,
-            "content": fact.content,
+            "discarded": discarded,
+            "count": len(discarded),
+            "errors": errors,
             "reason": reason,
             "note": "삭제하지 않고 비활성화했다. profile_restore 로 되살릴 수 있다",
         }
+
+    async def profile_confirm(fact_ids: list[int]) -> dict[str, Any]:
+        n = await profile.verify(fact_ids)
+        snapshot = await profile.read()
+        remaining = sum(
+            1 for facts in snapshot.by_kind.values() for f in facts if not f.is_verified
+        )
+        return {
+            "confirmed": n,
+            "unverified_remaining": remaining,
+            "note": "확인된 사실은 자소서 근거로 안심하고 인용할 수 있다",
+        }
+
+    async def profile_evidence(fact_ids: list[int]) -> dict[str, Any]:
+        snapshot = await profile.read()
+        wanted = set(fact_ids)
+        out = []
+        for facts in snapshot.by_kind.values():
+            for f in facts:
+                if f.id in wanted:
+                    out.append(
+                        {
+                            "fact_id": f.id,
+                            "kind": str(f.kind),
+                            "content": f.content,
+                            "evidence": f.evidence,
+                            "verified": f.is_verified,
+                        }
+                    )
+        return {"count": len(out), "facts": out}
 
     async def profile_restore(fact_id: int) -> dict[str, Any]:
         fact = await profile.restore(fact_id)
@@ -219,8 +256,28 @@ def build_profile_tools(
             "임포트 직후 결과를 보여주고 아닌 것이 있는지 물어보는 것이 좋다. "
             "reason: not_mine(다른 사람 정보) / incorrect(사실과 다름) / "
             "outdated(더는 해당 없음) / other. "
-            "내용이 바뀐 것뿐이라면 discard 가 아니라 profile_revise 를 쓴다.",
+            "내용이 바뀐 것뿐이라면 discard 가 아니라 profile_revise 를 쓴다. "
+            "여러 건을 한 번에 넘길 수 있다: fact_ids=[38, 45, 52]",
             profile_discard,
+        ),
+        ToolSpec(
+            "profile_confirm",
+            "사실이 정확하다고 사용자가 확인했음을 표시한다. "
+            "**임포트된 사실에는 과장이 섞인다** — GPT 가 대화를 요약하면서 "
+            "'기획을 논의했다'를 '기획에 참여했다'로 적는 식이다. "
+            "사용자가 '맞아', '그건 정확해' 라고 확인해 줄 때 호출한다. "
+            "확인되지 않은 사실은 매칭에서 unverified 로 표시되어 "
+            "자소서 근거로 확정적으로 쓰이지 않는다. "
+            "여러 건을 한 번에: fact_ids=[38, 45, 52]",
+            profile_confirm,
+        ),
+        ToolSpec(
+            "profile_evidence",
+            "특정 사실들의 **구체적 근거(evidence)** 를 가져온다. "
+            "jobs_match 응답에는 근거가 빠져 있다 — 매번 전부 보내면 낭비이기 때문이다. "
+            "**지원서에 쓸 재료를 만들거나 자소서 문장을 쓸 때 호출한다.** "
+            "매칭에서 인용한 fact_id 들을 넘기면 된다.",
+            profile_evidence,
         ),
         ToolSpec(
             "profile_restore",
