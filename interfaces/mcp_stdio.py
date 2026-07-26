@@ -22,7 +22,11 @@ from fastmcp import FastMCP  # noqa: E402
 
 import httpx  # noqa: E402
 
-from adapters.store.supabase_jobs import SupabaseJobStore  # noqa: E402
+from adapters.store.supabase_jobs import (  # noqa: E402
+    SupabaseInterestStore,
+    SupabaseJobStore,
+    SupabaseMatchStore,
+)
 from adapters.store.supabase_store import SupabaseProfileStore  # noqa: E402
 from core.application.import_service import ImportService  # noqa: E402
 from core.application.job_query_service import JobQueryService  # noqa: E402
@@ -48,6 +52,8 @@ def build_server() -> FastMCP:
     client = httpx.AsyncClient(timeout=30)
     profile_store = SupabaseProfileStore.from_env(client=client)
     job_store = SupabaseJobStore.from_env(client=client)
+    interest_store = SupabaseInterestStore.from_env(client=client)
+    match_store = SupabaseMatchStore.from_env(client=client)
 
     profile = ProfileService(profile_store)
 
@@ -56,7 +62,8 @@ def build_server() -> FastMCP:
     register(
         mcp,
         build_job_tools(
-            JobQueryService(job_store), MatchService(profile, job_store)
+            JobQueryService(job_store, match_store),
+            MatchService(profile, job_store, interest_store, match_store),
         ),
     )
     return mcp

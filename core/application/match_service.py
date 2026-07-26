@@ -12,13 +12,16 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
 from datetime import date, datetime
 
 from core.application.profile_service import ProfileService
 from core.domain.job import JobPosting
 from core.domain.match import MatchCandidates, MatchFilter
-from core.ports.store import JobStore
+from core.domain.job import InterestStatus, JobInterest
+from core.domain.match import MatchResult, ScoredJob
+from core.ports.store import InterestStore, JobStore, MatchStore
 
 #: 출처 표기 의무가 있는 소스. API 이용 승인 조건이다.
 ATTRIBUTION = {
@@ -30,6 +33,9 @@ ATTRIBUTION = {
 class MatchContext:
     candidates: MatchCandidates
     attributions: tuple[str, ...]
+    #: 공고별 지난번 점수. 같은 공고를 다시 볼 때 비교 기준이 된다.
+    previous_scores: Mapping[int, MatchResult] = field(default_factory=dict)
+    dismissed_count: int = 0
 
     @property
     def jobs(self) -> tuple[JobPosting, ...]:
@@ -37,9 +43,17 @@ class MatchContext:
 
 
 class MatchService:
-    def __init__(self, profile: ProfileService, jobs: JobStore) -> None:
+    def __init__(
+        self,
+        profile: ProfileService,
+        jobs: JobStore,
+        interest: InterestStore | None = None,
+        history: MatchStore | None = None,
+    ) -> None:
         self._profile = profile
         self._jobs = jobs
+        self._interest = interest
+        self._history = history
 
     async def candidates(self, flt: MatchFilter | None = None) -> MatchContext:
         criteria = flt or MatchFilter.for_newgrad_intern()
@@ -47,8 +61,16 @@ class MatchService:
         if criteria.deadline_after is None and not criteria.include_closed:
             criteria = _with_deadline(criteria, date.today())
 
-        postings = tuple(await self._jobs.search(criteria))
+        dismissed = list(await self._interest.dismissed_ids()) if self._interest else []
+        postings = tuple(await self._jobs.search(criteria, exclude_ids=dismissed))
         snapshot = await self._profile.read()
+
+        previous: Mapping[int, MatchResult] = {}
+        if self._history and postings:
+            previous = await self._history.latest_scores(
+                [p.id for p in postings if p.id is not None]
+            )
+
         return MatchContext(
             candidates=MatchCandidates(
                 profile=snapshot,
@@ -56,7 +78,37 @@ class MatchService:
                 generated_at=datetime.now().astimezone(),
             ),
             attributions=attributions_for(postings),
+            previous_scores=previous,
+            dismissed_count=len(dismissed),
         )
+
+    async def save_scores(
+        self, scores: Sequence[ScoredJob], *, criteria: MatchFilter
+    ) -> int:
+        """LLM 이 매긴 점수를 남긴다.
+
+        매번 새로 판단하므로 기록이 없으면 어제 80점이 오늘 65점이어도 알 수 없다.
+        """
+        if self._history is None:
+            raise RuntimeError("MatchStore 가 연결되지 않았다")
+        snapshot = await self._profile.read()
+        return await self._history.save_results(
+            scores, criteria=criteria, fact_count=snapshot.fact_count
+        )
+
+    async def mark(
+        self, job_id: int, status: InterestStatus, *, note: str | None = None
+    ) -> JobInterest:
+        if self._interest is None:
+            raise RuntimeError("InterestStore 가 연결되지 않았다")
+        return await self._interest.mark(job_id, status, note=note)
+
+    async def marked(
+        self, statuses: Sequence[InterestStatus] = ()
+    ) -> Sequence[JobInterest]:
+        if self._interest is None:
+            return []
+        return await self._interest.list_by_status(statuses)
 
 
     async def restricted_count(self, flt: MatchFilter) -> int:

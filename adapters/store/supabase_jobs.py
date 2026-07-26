@@ -14,6 +14,8 @@ from adapters.store.supabase_store import SupabaseClientMixin
 from core.domain.job import (
     MAX_HTML_SNAPSHOT,
     CaptureMethod,
+    InterestStatus,
+    JobInterest,
     CareerLevel,
     EmploymentType,
     JobKey,
@@ -22,7 +24,7 @@ from core.domain.job import (
     RawPosting,
     SourceStatus,
 )
-from core.domain.match import MatchFilter
+from core.domain.match import Evidence, Gap, MatchFilter, MatchResult, ScoredJob, Severity
 
 
 class SupabaseRawStore(SupabaseClientMixin):
@@ -166,8 +168,13 @@ class SupabaseJobStore(SupabaseClientMixin):
         )
         return self._to_posting(rows[0]) if rows else None
 
-    async def search(self, flt: MatchFilter) -> Sequence[JobPosting]:
-        rows = await self._request("GET", "/jobs", params=self._search_params(flt))
+    async def search(
+        self, flt: MatchFilter, *, exclude_ids: Sequence[int] = ()
+    ) -> Sequence[JobPosting]:
+        params = self._search_params(flt)
+        if flt.exclude_dismissed and exclude_ids:
+            params["id"] = f"not.in.({','.join(str(i) for i in exclude_ids)})"
+        rows = await self._request("GET", "/jobs", params=params)
         return [self._to_posting(r) for r in rows]
 
     @staticmethod
@@ -331,3 +338,155 @@ class SupabaseJobStore(SupabaseClientMixin):
 
 
 __all__ = ["SupabaseRawStore", "SupabaseJobStore", "MAX_HTML_SNAPSHOT"]
+
+
+class SupabaseInterestStore(SupabaseClientMixin):
+    """core.ports.store.InterestStore 구현."""
+
+    async def mark(
+        self, job_id: int, status: InterestStatus, *, note: str | None = None
+    ) -> JobInterest:
+        rows = await self._request(
+            "POST",
+            "/job_interest",
+            params={"on_conflict": "job_id"},
+            json={
+                "job_id": job_id,
+                "status": str(status),
+                "note": note,
+                "updated_at": datetime.now().astimezone().isoformat(),
+            },
+            prefer="resolution=merge-duplicates,return=representation",
+        )
+        return self._to_interest(rows[0])
+
+    async def get(self, job_id: int) -> JobInterest | None:
+        rows = await self._request(
+            "GET", "/job_interest", params={"job_id": f"eq.{job_id}", "select": "*"}
+        )
+        return self._to_interest(rows[0]) if rows else None
+
+    async def list_by_status(
+        self, statuses: Sequence[InterestStatus]
+    ) -> Sequence[JobInterest]:
+        params = {"select": "*", "order": "updated_at.desc"}
+        if statuses:
+            params["status"] = f"in.({','.join(str(s) for s in statuses)})"
+        rows = await self._request("GET", "/job_interest", params=params)
+        return [self._to_interest(r) for r in rows]
+
+    async def dismissed_ids(self) -> Sequence[int]:
+        rows = await self._request(
+            "GET",
+            "/job_interest",
+            params={
+                "select": "job_id",
+                "status": f"eq.{InterestStatus.NOT_INTERESTED}",
+            },
+        )
+        return [r["job_id"] for r in rows or []]
+
+    @staticmethod
+    def _to_interest(row: Mapping[str, Any]) -> JobInterest:
+        updated = row.get("updated_at")
+        return JobInterest(
+            job_id=row["job_id"],
+            status=InterestStatus(row["status"]),
+            note=row.get("note"),
+            updated_at=datetime.fromisoformat(updated) if updated else None,
+        )
+
+
+class SupabaseMatchStore(SupabaseClientMixin):
+    """core.ports.store.MatchStore 구현.
+
+    점수를 남기는 이유: 대화 중인 LLM 이 매번 새로 판단하므로 같은 공고가
+    어제 80점, 오늘 65점일 수 있다. 기록해야 비교와 회고가 가능하다.
+    """
+
+    async def save_results(
+        self, results: Sequence[ScoredJob], *, criteria: MatchFilter, fact_count: int
+    ) -> int:
+        run = await self._request(
+            "POST",
+            "/match_runs",
+            json={
+                "criteria": {
+                    "keyword": criteria.keyword,
+                    "location": criteria.location,
+                    "limit": criteria.limit,
+                    "include_restricted": criteria.include_restricted,
+                },
+                "fact_count": fact_count,
+            },
+            prefer="return=representation",
+        )
+        run_id = run[0]["id"]
+        if results:
+            await self._request(
+                "POST",
+                "/match_results",
+                json=[
+                    {
+                        "run_id": run_id,
+                        "job_id": r.job_id,
+                        "score": r.score,
+                        "matched": [
+                            {"jd_req": e.jd_requirement, "evidence_fact_id": e.fact_id}
+                            for e in r.matched
+                        ],
+                        "gaps": [
+                            {
+                                "jd_req": g.jd_requirement,
+                                "severity": str(g.severity),
+                                "suggestion": g.suggestion,
+                            }
+                            for g in r.gaps
+                        ],
+                    }
+                    for r in results
+                ],
+                prefer="return=minimal",
+            )
+        return run_id
+
+    async def history(
+        self, *, job_id: int | None = None, limit: int = 50
+    ) -> Sequence[MatchResult]:
+        params = {"select": "*", "order": "id.desc", "limit": str(limit)}
+        if job_id is not None:
+            params["job_id"] = f"eq.{job_id}"
+        rows = await self._request("GET", "/match_results", params=params)
+        return [self._to_result(r) for r in rows or []]
+
+    async def latest_scores(self, job_ids: Sequence[int]) -> Mapping[int, MatchResult]:
+        if not job_ids:
+            return {}
+        rows = await self._request(
+            "GET",
+            "/latest_match_scores",
+            params={
+                "select": "*",
+                "job_id": f"in.({','.join(str(i) for i in job_ids)})",
+            },
+        )
+        return {r["job_id"]: self._to_result(r) for r in rows or []}
+
+    @staticmethod
+    def _to_result(row: Mapping[str, Any]) -> MatchResult:
+        return MatchResult(
+            job_id=row["job_id"],
+            score=row["score"],
+            matched=tuple(
+                Evidence(m.get("jd_req", ""), m.get("evidence_fact_id", 0))
+                for m in (row.get("matched") or [])
+            ),
+            gaps=tuple(
+                Gap(
+                    g.get("jd_req", ""),
+                    Severity(g.get("severity", "medium")),
+                    g.get("suggestion", ""),
+                )
+                for g in (row.get("gaps") or [])
+            ),
+        )

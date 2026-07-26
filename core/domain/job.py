@@ -53,6 +53,25 @@ class JobStatus(StrEnum):
     CLOSED = "closed"
 
 
+class InterestStatus(StrEnum):
+    """사용자가 공고에 대해 취한 입장.
+
+    이게 없으면 매번 같은 후보가 다시 올라온다.
+    NOT_INTERESTED 는 기본 조회에서 빠지고, 나머지는 남는다 —
+    지원한 곳을 목록에서 지우면 현황을 볼 수 없기 때문이다.
+    """
+
+    SAVED = "saved"                    # 관심 있음 / 스크랩
+    APPLIED = "applied"                # 지원함
+    NOT_INTERESTED = "not_interested"  # 관심 없음 → 추천에서 제외
+    REJECTED = "rejected"              # 불합격
+    ACCEPTED = "accepted"              # 합격
+
+    @property
+    def hides_from_recommendations(self) -> bool:
+        return self is InterestStatus.NOT_INTERESTED
+
+
 @dataclass(frozen=True, slots=True)
 class JobKey:
     """중복 제거의 전부. 이 조합이 안정적이어야 파이프라인 전체가 안정적이다.
@@ -139,6 +158,14 @@ class ParseFailed:
 
 
 ParseResult = ParseOk | ParseFailed
+
+
+@dataclass(frozen=True, slots=True)
+class JobInterest:
+    job_id: int
+    status: InterestStatus
+    note: str | None = None
+    updated_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)

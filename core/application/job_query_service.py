@@ -6,13 +6,21 @@ from collections.abc import Mapping, Sequence
 from datetime import date
 
 from core.domain.job import JobPosting, SourceStatus
-from core.domain.match import MatchFilter
-from core.ports.store import JobStore
+from core.domain.match import MatchFilter, MatchResult
+from core.ports.store import JobStore, MatchStore
 
 
 class JobQueryService:
-    def __init__(self, jobs: JobStore) -> None:
+    def __init__(self, jobs: JobStore, history: MatchStore | None = None) -> None:
         self._jobs = jobs
+        self._history = history
+
+    async def match_history(
+        self, *, job_id: int | None = None, limit: int = 30
+    ) -> Sequence[MatchResult]:
+        if self._history is None:
+            return []
+        return await self._history.history(job_id=job_id, limit=limit)
 
     async def search(self, flt: MatchFilter) -> Sequence[JobPosting]:
         return await self._jobs.search(flt)

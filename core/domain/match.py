@@ -38,6 +38,8 @@ class MatchFilter:
     #: 지원 자격이 제한된 공고(장애인 전형 등)를 포함할지.
     #: 기본은 제외하되 몇 건이 빠졌는지는 호출측이 보고한다.
     include_restricted: bool = False
+    #: '관심 없음' 으로 표시한 공고를 제외할지. 기본은 제외한다.
+    exclude_dismissed: bool = True
     limit: int = DEFAULT_CANDIDATE_LIMIT
 
     def __post_init__(self) -> None:
@@ -92,6 +94,16 @@ class MatchCandidates:
     profile: ProfileSnapshot
     jobs: tuple[JobPosting, ...]
     generated_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ScoredJob:
+    """LLM 이 되돌려주는 평가 1건. match_save 의 입력."""
+
+    job_id: int
+    score: int
+    matched: tuple[Evidence, ...] = ()
+    gaps: tuple[Gap, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

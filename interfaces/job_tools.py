@@ -13,8 +13,8 @@ from typing import Any
 
 from core.application.job_query_service import JobQueryService
 from core.application.match_service import MatchService, attributions_for
-from core.domain.job import CareerLevel, EmploymentType, JobPosting
-from core.domain.match import MatchFilter
+from core.domain.job import CareerLevel, EmploymentType, InterestStatus, JobPosting
+from core.domain.match import Evidence, Gap, MatchFilter, ScoredJob, Severity
 from interfaces.tool_registry import ToolSpec
 
 #: 후보 1건당 요건을 몇 개까지 보여줄지. 순위 매기기에는 이 정도면 충분하다.
@@ -128,6 +128,7 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
         context = await matcher.candidates(base)
         excluded = await matcher.restricted_count(base) if not include_restricted else 0
         snapshot = context.candidates.profile
+        prev = context.previous_scores
         return {
             "profile": {
                 "fact_count": snapshot.fact_count,
@@ -144,7 +145,17 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
                 },
             },
             "candidate_count": len(context.jobs),
-            "candidates": [_brief(j) for j in context.jobs],
+            "candidates": [
+                {
+                    **_brief(j),
+                    **(
+                        {"previous_score": prev[j.id].score}
+                        if j.id in prev else {}
+                    ),
+                }
+                for j in context.jobs
+            ],
+            "dismissed_count": context.dismissed_count,
             "attribution": list(context.attributions),
             "excluded_restricted": excluded,
             "excluded_note": (
@@ -159,7 +170,11 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
                 "matched 의 각 항목에는 근거가 된 fact_id 를 반드시 포함하라 — "
                 "근거 없는 점수는 자소서에 쓸 수 없다. "
                 "gaps 에는 severity(low/medium/high)와 구체적인 보완 제안을 넣어라. "
-                "상위 5개 정도만 자세히 설명하고 나머지는 간단히 언급하라."
+                "상위 5개 정도만 자세히 설명하고 나머지는 간단히 언급하라. "
+                "**평가를 마치면 match_save 로 점수를 반드시 저장하라** — "
+                "저장하지 않으면 다음에 같은 공고를 볼 때 비교할 기준이 없다. "
+                "previous_score 가 있는 후보는 지난번 평가 결과이므로 "
+                "점수가 크게 달라졌다면 이유를 설명하라."
             ),
         }
 
@@ -168,6 +183,92 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
         if job is None:
             return {"error": f"공고를 찾을 수 없다: job_id={job_id}"}
         return {"job": _full(job), "attribution": list(attributions_for((job,)))}
+
+    async def job_mark(
+        job_id: int, status: str, note: str | None = None
+    ) -> dict[str, Any]:
+        marked = await matcher.mark(job_id, InterestStatus(status), note=note)
+        job = await queries.detail(job_id)
+        return {
+            "job_id": marked.job_id,
+            "title": job.title if job else None,
+            "status": str(marked.status),
+            "note": marked.note,
+            "effect": (
+                "앞으로 추천에서 제외된다"
+                if marked.status.hides_from_recommendations
+                else "추천 목록에 계속 표시된다"
+            ),
+        }
+
+    async def job_list(status: str | None = None) -> dict[str, Any]:
+        statuses = (InterestStatus(status),) if status else ()
+        marks = await matcher.marked(statuses)
+        items = []
+        for m in marks:
+            job = await queries.detail(m.job_id)
+            items.append(
+                {
+                    "job_id": m.job_id,
+                    "status": str(m.status),
+                    "note": m.note,
+                    "title": job.title if job else "(공고 없음)",
+                    "company": job.company if job else None,
+                    "deadline": job.deadline.isoformat() if job and job.deadline else None,
+                    "days_left": _days_left(job.deadline) if job else None,
+                    "url": job.url if job else None,
+                }
+            )
+        return {"count": len(items), "jobs": items}
+
+    async def match_save(scores: list[dict[str, Any]]) -> dict[str, Any]:
+        parsed = [
+            ScoredJob(
+                job_id=int(s["job_id"]),
+                score=int(s["score"]),
+                matched=tuple(
+                    Evidence(m.get("jd_req", ""), int(m.get("fact_id", 0)))
+                    for m in (s.get("matched") or [])
+                ),
+                gaps=tuple(
+                    Gap(
+                        g.get("jd_req", ""),
+                        Severity(g.get("severity", "medium")),
+                        g.get("suggestion", ""),
+                    )
+                    for g in (s.get("gaps") or [])
+                ),
+            )
+            for s in scores
+        ]
+        run_id = await matcher.save_scores(
+            parsed, criteria=MatchFilter.for_newgrad_intern()
+        )
+        return {
+            "run_id": run_id,
+            "saved": len(parsed),
+            "note": "다음 jobs_match 에서 previous_score 로 비교된다",
+        }
+
+    async def match_history(job_id: int | None = None, limit: int = 30) -> dict[str, Any]:
+        results = await queries.match_history(job_id=job_id, limit=limit)
+        items = []
+        for r in results:
+            job = await queries.detail(r.job_id)
+            items.append(
+                {
+                    "job_id": r.job_id,
+                    "title": job.title if job else "(공고 없음)",
+                    "company": job.company if job else None,
+                    "score": r.score,
+                    "matched_count": len(r.matched),
+                    "gaps": [
+                        {"jd_req": g.jd_requirement, "severity": str(g.severity)}
+                        for g in r.gaps
+                    ],
+                }
+            )
+        return {"count": len(items), "results": items}
 
     async def ingest_status() -> dict[str, Any]:
         status = await queries.status()
@@ -220,6 +321,44 @@ def build_job_tools(queries: JobQueryService, matcher: MatchService) -> list[Too
             "그 공고에 맞춘 자소서·지원 전략을 논의할 때 호출한다. "
             "job_id 는 jobs_match 나 jobs_search 결과에 들어 있다.",
             job_detail,
+        ),
+        ToolSpec(
+            "job_mark",
+            "공고에 대한 사용자의 입장을 기록한다. "
+            "**사용자가 '거기 지원했어', '이건 관심 없어', '이건 저장해둬', "
+            "'거기 떨어졌어', '합격했어' 라고 할 때 호출한다.** "
+            "status: saved(관심/스크랩) / applied(지원함) / "
+            "not_interested(관심 없음 → 추천에서 제외) / rejected(불합격) / accepted(합격). "
+            "not_interested 만 추천에서 빠지고 나머지는 목록에 남는다 — "
+            "지원한 곳을 지우면 현황을 볼 수 없기 때문이다. "
+            "note 에 마감일이나 준비 상황을 적어둘 수 있다.",
+            job_mark,
+        ),
+        ToolSpec(
+            "job_list",
+            "사용자가 표시해 둔 공고 목록을 본다. "
+            "'내가 지원한 곳', '스크랩한 거 보여줘', '지원 현황' 같은 요청에 호출한다. "
+            "status 로 좁힐 수 있다(saved/applied/not_interested/rejected/accepted). "
+            "생략하면 표시된 것 전부를 보여준다.",
+            job_list,
+        ),
+        ToolSpec(
+            "match_save",
+            "jobs_match 로 평가한 결과를 저장한다. "
+            "**jobs_match 로 순위를 매긴 뒤 반드시 호출하라.** "
+            "저장하지 않으면 다음에 같은 공고를 평가할 때 비교 기준이 없어 "
+            "점수가 매번 달라지는 것을 사용자가 알 수 없다. "
+            "scores 는 [{job_id, score, matched:[{jd_req, fact_id}], "
+            "gaps:[{jd_req, severity, suggestion}]}] 형식이다.",
+            match_save,
+        ),
+        ToolSpec(
+            "match_history",
+            "과거 매칭 평가 기록을 조회한다. "
+            "'전에 추천받은 거 보여줘', '이 공고 지난번엔 몇 점이었어?', "
+            "'내 부족한 점이 나아졌나' 같은 요청에 호출한다. "
+            "job_id 를 주면 그 공고의 점수 변화만 본다.",
+            match_history,
         ),
         ToolSpec(
             "ingest_status",

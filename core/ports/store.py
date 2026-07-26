@@ -9,8 +9,15 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime
 from typing import Protocol
 
-from core.domain.job import JobPosting, JobKey, RawPosting, SourceStatus
-from core.domain.match import MatchFilter, MatchResult
+from core.domain.job import (
+    JobInterest,
+    JobKey,
+    JobPosting,
+    InterestStatus,
+    RawPosting,
+    SourceStatus,
+)
+from core.domain.match import MatchFilter, MatchResult, ScoredJob
 from core.domain.profile import (
     AttributeKey,
     DiscardReason,
@@ -116,8 +123,13 @@ class JobStore(Protocol):
 
     async def get(self, job_id: int) -> JobPosting | None: ...
 
-    async def search(self, flt: MatchFilter) -> Sequence[JobPosting]:
-        """① 규칙 필터 단계. 수백 건을 flt.limit 건까지 좁힌다."""
+    async def search(
+        self, flt: MatchFilter, *, exclude_ids: Sequence[int] = ()
+    ) -> Sequence[JobPosting]:
+        """① 규칙 필터 단계. 수백 건을 flt.limit 건까지 좁힌다.
+
+        exclude_ids 는 '관심 없음' 으로 표시된 공고다.
+        """
         ...
 
     async def count(self, flt: MatchFilter) -> int:
@@ -131,11 +143,35 @@ class JobStore(Protocol):
     async def ingest_status(self) -> Mapping[str, SourceStatus]: ...
 
 
+class InterestStore(Protocol):
+    """공고에 대한 사용자의 입장. 매번 같은 후보가 다시 올라오는 것을 막는다."""
+
+    async def mark(
+        self, job_id: int, status: InterestStatus, *, note: str | None = None
+    ) -> JobInterest: ...
+
+    async def get(self, job_id: int) -> JobInterest | None: ...
+
+    async def list_by_status(
+        self, statuses: Sequence[InterestStatus]
+    ) -> Sequence[JobInterest]: ...
+
+    async def dismissed_ids(self) -> Sequence[int]:
+        """추천에서 뺄 공고 id. search 가 이 목록을 제외한다."""
+        ...
+
+
 class MatchStore(Protocol):
     async def save_results(
-        self, results: Sequence[MatchResult], *, criteria: MatchFilter
+        self, results: Sequence[ScoredJob], *, criteria: MatchFilter, fact_count: int
     ) -> int:
         """run_id 를 돌려준다."""
         ...
 
-    async def history(self, job_id: int) -> Sequence[MatchResult]: ...
+    async def history(
+        self, *, job_id: int | None = None, limit: int = 50
+    ) -> Sequence[MatchResult]: ...
+
+    async def latest_scores(self, job_ids: Sequence[int]) -> Mapping[int, MatchResult]:
+        """공고별 가장 최근 점수. '이전 추천을 한눈에' 의 재료."""
+        ...
