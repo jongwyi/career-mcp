@@ -19,7 +19,13 @@ from typing import Any
 
 from core.application.import_service import ImportService, UnsupportedFormatError
 from core.application.profile_service import ProfileService
-from core.domain.profile import Fact, FactKind, FactSource
+from core.domain.profile import (
+    AttributeKey,
+    DiscardReason,
+    Fact,
+    FactKind,
+    FactSource,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,12 +52,46 @@ def build_profile_tools(
     async def profile_read(kinds: list[str] | None = None) -> dict[str, Any]:
         parsed = [FactKind(k) for k in kinds] if kinds else None
         snapshot = await profile.read(kinds=parsed)
+        attrs = await profile.attributes()
+        missing = attrs.missing_essentials()
         return {
             "fact_count": snapshot.fact_count,
+            "attributes": {str(k): v for k, v in attrs.values.items()},
+            "missing_attributes": [str(k) for k in missing],
+            "missing_note": (
+                "지원 자격 판단에 필요한 값이 비어 있다. "
+                "대화 중 자연스럽게 물어보고 profile_set 으로 채워라."
+                if missing else None
+            ),
             "facts": {
                 str(kind): [_fact_out(f) for f in facts]
                 for kind, facts in snapshot.by_kind.items()
             },
+        }
+
+    async def profile_discard(
+        fact_id: int, reason: str = "not_mine"
+    ) -> dict[str, Any]:
+        fact = await profile.discard(fact_id, DiscardReason(reason))
+        return {
+            "discarded_fact_id": fact.id,
+            "content": fact.content,
+            "reason": reason,
+            "note": "삭제하지 않고 비활성화했다. profile_restore 로 되살릴 수 있다",
+        }
+
+    async def profile_restore(fact_id: int) -> dict[str, Any]:
+        fact = await profile.restore(fact_id)
+        return {"restored_fact_id": fact.id, "content": fact.content}
+
+    async def profile_set(key: str, value: str) -> dict[str, Any]:
+        attr = AttributeKey(key)
+        await profile.set_attribute(attr, value)
+        attrs = await profile.attributes()
+        return {
+            "key": str(attr),
+            "value": value,
+            "missing_attributes": [str(k) for k in attrs.missing_essentials()],
         }
 
     async def profile_append(
@@ -169,6 +209,36 @@ def build_profile_tools(
             "since 는 ISO8601 형식(예: '2026-07-01T00:00:00+09:00'), "
             "source 는 claude / gpt_import / manual 중 하나다.",
             profile_diff,
+        ),
+        ToolSpec(
+            "profile_discard",
+            "프로필의 특정 사실을 비활성화한다. **삭제가 아니라 보류다.** "
+            "사용자가 '그건 내 정보 아니야', '그건 사실과 달라', "
+            "'그건 빼줘' 라고 할 때 호출한다. "
+            "임포트한 파일에 다른 사람의 정보가 섞여 있을 수 있으므로 "
+            "임포트 직후 결과를 보여주고 아닌 것이 있는지 물어보는 것이 좋다. "
+            "reason: not_mine(다른 사람 정보) / incorrect(사실과 다름) / "
+            "outdated(더는 해당 없음) / other. "
+            "내용이 바뀐 것뿐이라면 discard 가 아니라 profile_revise 를 쓴다.",
+            profile_discard,
+        ),
+        ToolSpec(
+            "profile_restore",
+            "보류했던 사실을 되살린다. 사용자가 '아까 뺀 거 다시 넣어줘' 라고 할 때 호출한다.",
+            profile_restore,
+        ),
+        ToolSpec(
+            "profile_set",
+            "지원 자격 판단에 쓰이는 핵심 값을 설정한다. "
+            "**공고 대부분이 연령(만 15~34세)·학력·재학 여부·어학을 조건으로 걸기 때문에 "
+            "이 값들이 없으면 지원 가능 여부 자체를 판단할 수 없다.** "
+            "profile_read 의 missing_attributes 에 항목이 있으면 "
+            "대화 중 자연스럽게 물어보고 채워라. "
+            "key: birth_year / school / major / double_major / enrollment_status "
+            "(재학·휴학·졸업·졸업예정) / expected_graduation / languages "
+            "(예: 'TOEIC 850, OPIc IH') / certifications / military_status / "
+            "location_preference",
+            profile_set,
         ),
         ToolSpec(
             "profile_import",

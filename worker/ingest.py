@@ -79,8 +79,14 @@ async def run(full: bool, max_pages: int) -> int:
         log(f"마감 처리: {closed}건")
 
         try:
-            pruned = await raw_store.prune()
-            log(f"원본 정리: {pruned}건 (공고당 최신 1건만 유지)")
+            # 한 문장에 다 지우면 타임아웃이 난다. 0 이 될 때까지 배치로 반복한다.
+            total_pruned = 0
+            for _ in range(50):
+                removed = await raw_store.prune()
+                total_pruned += removed
+                if removed == 0:
+                    break
+            log(f"원본 정리: {total_pruned}건 (공고당 최신 1건만 유지)")
         except Exception as exc:
             # 정리 실패가 수집을 실패로 만들지는 않는다.
             log(f"경고: 원본 정리 실패 — {exc}")

@@ -24,3 +24,8 @@ extension/dist/
 
 # OS
 .DS_Store
+
+# 프로필 데이터 (개인정보) — 확장자 무관 전면 차단
+career_profile*.json
+*profile*.json
+!profile-import-example.json

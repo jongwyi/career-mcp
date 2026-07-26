@@ -17,9 +17,12 @@ from typing import Any
 import httpx
 
 from core.domain.profile import (
+    AttributeKey,
+    DiscardReason,
     Fact,
     FactKind,
     FactSource,
+    ProfileAttributes,
     ProfileSnapshot,
     build_snapshot,
 )
@@ -120,6 +123,16 @@ class SupabaseProfileStore(SupabaseClientMixin):
             session_ref=row.get("session_ref"),
             created_at=datetime.fromisoformat(created) if created else None,
             superseded_by=row.get("superseded_by"),
+            discarded_at=(
+                datetime.fromisoformat(row["discarded_at"])
+                if row.get("discarded_at")
+                else None
+            ),
+            discard_reason=(
+                DiscardReason(row["discard_reason"])
+                if row.get("discard_reason")
+                else None
+            ),
         )
 
     @staticmethod
@@ -165,6 +178,7 @@ class SupabaseProfileStore(SupabaseClientMixin):
         params: dict[str, str] = {"select": "*", "order": "created_at.desc"}
         if active_only:
             params["superseded_by"] = "is.null"
+            params["discarded_at"] = "is.null"
         if kinds:
             params["kind"] = f"in.({','.join(str(k) for k in kinds)})"
         if source:
@@ -183,6 +197,70 @@ class SupabaseProfileStore(SupabaseClientMixin):
         )
         row = result[0] if isinstance(result, list) else result
         return self._to_fact(row)
+
+    async def discard_fact(self, fact_id: int, *, reason: DiscardReason) -> Fact:
+        rows = await self._request(
+            "PATCH",
+            "/profile_facts",
+            params={"id": f"eq.{fact_id}", "discarded_at": "is.null"},
+            json={
+                "discarded_at": datetime.now().astimezone().isoformat(),
+                "discard_reason": str(reason),
+            },
+            prefer="return=representation",
+        )
+        if not rows:
+            raise LookupError(f"보류할 수 없다 (없거나 이미 보류됨): id={fact_id}")
+        return self._to_fact(rows[0])
+
+    async def restore_fact(self, fact_id: int) -> Fact:
+        rows = await self._request(
+            "PATCH",
+            "/profile_facts",
+            params={"id": f"eq.{fact_id}"},
+            json={"discarded_at": None, "discard_reason": None},
+            prefer="return=representation",
+        )
+        if not rows:
+            raise LookupError(f"되살릴 수 없다: id={fact_id}")
+        return self._to_fact(rows[0])
+
+    async def list_discarded(self) -> Sequence[Fact]:
+        rows = await self._request(
+            "GET",
+            "/profile_facts",
+            params={
+                "select": "*",
+                "discarded_at": "not.is.null",
+                "order": "discarded_at.desc",
+            },
+        )
+        return [self._to_fact(r) for r in rows]
+
+    async def get_attributes(self) -> ProfileAttributes:
+        rows = await self._request(
+            "GET", "/profile_attributes", params={"select": "key,value"}
+        )
+        values: dict[AttributeKey, str] = {}
+        for row in rows or []:
+            try:
+                values[AttributeKey(row["key"])] = row["value"]
+            except ValueError:
+                continue  # 알 수 없는 키는 무시한다 (스키마가 앞서갈 수 있다)
+        return ProfileAttributes(values=values)
+
+    async def set_attribute(self, key: AttributeKey, value: str) -> None:
+        await self._request(
+            "POST",
+            "/profile_attributes",
+            params={"on_conflict": "key"},
+            json={
+                "key": str(key),
+                "value": value,
+                "updated_at": datetime.now().astimezone().isoformat(),
+            },
+            prefer="resolution=merge-duplicates,return=minimal",
+        )
 
     async def load_snapshot(self) -> ProfileSnapshot | None:
         rows = await self._request(

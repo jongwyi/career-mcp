@@ -11,7 +11,15 @@ from typing import Protocol
 
 from core.domain.job import JobPosting, JobKey, RawPosting, SourceStatus
 from core.domain.match import MatchFilter, MatchResult
-from core.domain.profile import Fact, FactKind, FactSource, ProfileSnapshot
+from core.domain.profile import (
+    AttributeKey,
+    DiscardReason,
+    Fact,
+    FactKind,
+    FactSource,
+    ProfileAttributes,
+    ProfileSnapshot,
+)
 
 
 class ProfileStore(Protocol):
@@ -35,6 +43,26 @@ class ProfileStore(Protocol):
     async def supersede_fact(self, fact_id: int, replacement: Fact) -> Fact:
         """replacement 를 저장하고 원본에 superseded_by 를 건다. 원자적이어야 한다."""
         ...
+
+    async def discard_fact(
+        self, fact_id: int, *, reason: DiscardReason
+    ) -> Fact:
+        """사실을 비활성화한다. 지우지 않는다.
+
+        임포트한 JSON 에 다른 사람의 정보나 틀린 내용이 섞일 수 있다.
+        되돌아보거나 되살릴 수 있어야 하므로 삭제하지 않는다.
+        """
+        ...
+
+    async def restore_fact(self, fact_id: int) -> Fact:
+        """보류를 취소한다."""
+        ...
+
+    async def list_discarded(self) -> Sequence[Fact]: ...
+
+    async def get_attributes(self) -> ProfileAttributes: ...
+
+    async def set_attribute(self, key: AttributeKey, value: str) -> None: ...
 
     async def load_snapshot(self) -> ProfileSnapshot | None:
         """캐시된 스냅샷. 없으면 None — 호출측이 facts 로 재생성한다."""
@@ -67,11 +95,12 @@ class RawStore(Protocol):
         self, raw_ids: Sequence[int], *, ok: bool, reason: str | None = None
     ) -> None: ...
 
-    async def prune(self) -> int:
-        """공고당 최신 1건만 남기고 오래된 원본을 지운다.
+    async def prune(self, *, batch_limit: int = 2000) -> int:
+        """공고당 최신 1건만 남기고 오래된 원본을 한 배치 지운다.
 
         전체 백필마다 원본이 누적되면 무료 한도를 넘긴다.
-        재파싱에는 최신 1건이면 충분하고, 파싱 실패분은 남긴다.
+        전체를 한 문장에 지우면 타임아웃이 나므로 배치로 나눈다 —
+        호출측이 0 이 될 때까지 반복한다.
         """
         ...
 

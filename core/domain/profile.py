@@ -25,6 +25,44 @@ class FactKind(StrEnum):
     GOAL = "goal"
 
 
+class DiscardReason(StrEnum):
+    """보류 사유. 대체(supersede)와 구분한다 —
+    대체는 '내용이 바뀐 것', 보류는 '애초에 내 것이 아니거나 틀린 것'이다."""
+
+    NOT_MINE = "not_mine"      # 다른 사람의 정보
+    INCORRECT = "incorrect"    # 사실과 다름
+    OUTDATED = "outdated"      # 더 이상 해당 없음
+    OTHER = "other"
+
+
+class AttributeKey(StrEnum):
+    """지원 자격 판단에 반복적으로 쓰이는 값들.
+
+    사실(fact)이 아니라 값이다 — 하나뿐이고, 갱신되며,
+    **비어 있는지 아닌지가 중요하다.** facts 로 표현하면 빠진 걸 알아챌 수 없다.
+    """
+
+    BIRTH_YEAR = "birth_year"                  # 청년 요건(만 15~34세) 판단
+    SCHOOL = "school"
+    MAJOR = "major"
+    DOUBLE_MAJOR = "double_major"
+    ENROLLMENT_STATUS = "enrollment_status"    # 재학/휴학/졸업/졸업예정
+    EXPECTED_GRADUATION = "expected_graduation"
+    LANGUAGES = "languages"                    # 예: "TOEIC 850, OPIc IH"
+    CERTIFICATIONS = "certifications"
+    MILITARY_STATUS = "military_status"
+    LOCATION_PREFERENCE = "location_preference"
+
+
+#: 이게 없으면 지원 가능 여부 자체를 판단할 수 없는 항목들.
+ESSENTIAL_ATTRIBUTES = (
+    AttributeKey.BIRTH_YEAR,
+    AttributeKey.ENROLLMENT_STATUS,
+    AttributeKey.MAJOR,
+    AttributeKey.LANGUAGES,
+)
+
+
 class FactSource(StrEnum):
     """어느 경로로 알게 된 사실인지.
 
@@ -49,6 +87,8 @@ class Fact:
     session_ref: str | None = None
     created_at: datetime | None = None
     superseded_by: int | None = None
+    discarded_at: datetime | None = None
+    discard_reason: DiscardReason | None = None
 
     def __post_init__(self) -> None:
         if not self.content.strip():
@@ -58,7 +98,11 @@ class Fact:
 
     @property
     def is_active(self) -> bool:
-        return self.superseded_by is None
+        return self.superseded_by is None and self.discarded_at is None
+
+    @property
+    def is_discarded(self) -> bool:
+        return self.discarded_at is not None
 
     @property
     def dedupe_hash(self) -> str:
@@ -77,6 +121,14 @@ def fact_hash(kind: FactKind, content: str) -> str:
 
     normalized = re.sub(r"\s+", " ", content).strip().lower()
     return hashlib.sha256(f"{kind}\x00{normalized}".encode()).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class ProfileAttributes:
+    values: Mapping[AttributeKey, str]
+
+    def missing_essentials(self) -> tuple[AttributeKey, ...]:
+        return tuple(k for k in ESSENTIAL_ATTRIBUTES if not self.values.get(k))
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +179,8 @@ def validate_supersede(original: Fact) -> None:
     """
     if original.id is None:
         raise ValueError("저장되지 않은 Fact 는 대체할 수 없다")
+    if original.is_discarded:
+        raise ValueError(f"보류된 Fact 다. 되살린 뒤 수정하라: id={original.id}")
     if not original.is_active:
         raise ValueError(f"이미 대체된 Fact 다: id={original.id}")
 

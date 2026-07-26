@@ -8,9 +8,12 @@ from datetime import datetime
 
 from core.application.snapshot import refresh_snapshot
 from core.domain.profile import (
+    AttributeKey,
+    DiscardReason,
     Fact,
     FactKind,
     FactSource,
+    ProfileAttributes,
     ProfileSnapshot,
     build_snapshot,
     facts_since,
@@ -112,6 +115,30 @@ class ProfileService:
         saved = await self._store.supersede_fact(fact_id, replacement)
         await self._refresh_snapshot()
         return saved
+
+    async def discard(
+        self, fact_id: int, reason: DiscardReason = DiscardReason.NOT_MINE
+    ) -> Fact:
+        """내 것이 아니거나 틀린 사실을 비활성화한다. 지우지 않는다."""
+        fact = await self._store.discard_fact(fact_id, reason=reason)
+        await self._refresh_snapshot()
+        return fact
+
+    async def restore(self, fact_id: int) -> Fact:
+        fact = await self._store.restore_fact(fact_id)
+        await self._refresh_snapshot()
+        return fact
+
+    async def discarded(self) -> Sequence[Fact]:
+        return await self._store.list_discarded()
+
+    async def attributes(self) -> ProfileAttributes:
+        return await self._store.get_attributes()
+
+    async def set_attribute(self, key: AttributeKey, value: str) -> None:
+        if not value.strip():
+            raise ValueError("값이 비어 있다")
+        await self._store.set_attribute(key, value.strip())
 
     # ---------------------------------------------------------------- 내부
 
