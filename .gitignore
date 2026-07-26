@@ -25,7 +25,10 @@ extension/dist/
 # OS
 .DS_Store
 
-# 프로필 데이터 (개인정보) — 확장자 무관 전면 차단
-career_profile*.json
-*profile*.json
-!profile-import-example.json
+# 프로필 데이터 (개인정보)
+#
+# 파일명 패턴으로 막으면 반드시 샌다 — career_profile.json 이 실제로 공개 저장소에
+# 올라갔고, 그 다음엔 한글 파일명이 뚫렸다. 그래서 **루트의 모든 .json 을 막고**
+# 필요한 것만 명시적으로 허용한다. 코드용 JSON 은 하위 디렉토리에 둔다.
+/*.json
+!/.markdownlint.json
